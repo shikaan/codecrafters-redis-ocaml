@@ -6,7 +6,7 @@ module RedisMessage = struct
   let rec show = function
     | BulkString s -> "BulkString: " ^ s
     | SimpleString s -> "SimpleString: " ^ s
-    | Array a -> "Array: [" ^ (String.concat "; " (List.map show a)) ^ "]"
+    | Array a -> "Array: [" ^ String.concat "; " (List.map show a) ^ "]"
 
   let rec to_buf ?buf v =
     let buf = Option.fold ~none:(Buffer.create 64) ~some:Fun.id buf in
@@ -27,9 +27,7 @@ module RedisMessage = struct
         | None -> None
         | Some lf ->
             let line_len = lf - offset - 1 in
-            let line =
-              Bytes.uppercase_ascii (Bytes.sub bytes offset line_len)
-            in
+            let line = Bytes.sub bytes offset line_len in
             Some (line, line_len, lf + 1)
       in
       let rec parse offset =
@@ -66,7 +64,7 @@ module RedisMessage = struct
                       else
                         match parse offset with
                         | Error e -> Error e
-                        | Ok (msg, next) -> loop (n - 1) (list @ [msg]) next
+                        | Ok (msg, next) -> loop (n - 1) (list @ [ msg ]) next
                     in
                     loop len [] next)
             | _ -> Error "unexpected message type")
@@ -83,11 +81,14 @@ let rec handle client_socket =
         (match RedisMessage.of_bytes req with
         | Error e -> failwith e
         | Ok msg -> (
-          Printf.eprintf "msg: %s\n" (RedisMessage.show msg);
+            Printf.eprintf "msg: %s\n" (RedisMessage.show msg);
             match msg with
-            | Array [ BulkString "PING" ] -> SimpleString "PONG"
-            | Array [ BulkString "ECHO"; BulkString s ] -> BulkString s
-            | _ -> failwith ("error: " ^ String.of_bytes req) ))
+            | Array (BulkString cmd :: args) -> (
+                match (String.uppercase_ascii cmd, args) with
+                | "PING", [] -> SimpleString "PONG"
+                | "ECHO", [ BulkString s ] -> BulkString s
+                | _ -> failwith ("error: " ^ String.of_bytes req))
+            | _ -> failwith ("error: " ^ String.of_bytes req)))
     in
     ignore (write client_socket res 0 (Bytes.length res));
     handle client_socket)
