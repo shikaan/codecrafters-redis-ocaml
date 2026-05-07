@@ -1,15 +1,5 @@
 open Unix
 
-module Timestamp = struct
-  type t = float
-  let never = max_float
-
-  let now _ = Unix.gettimeofday () *. 1000.0
-  let add_s s = now () +. (s *. 1000.0)
-  let add ms = now () +. ms
-  let is_expired ts = ts <> never && ts < (now ())
-end
-
 type record = { value: string; expires_at: Timestamp.t; }
 let memory: (string, record) Hashtbl.t = Hashtbl.create 16
 
@@ -44,6 +34,22 @@ let get key =
         RedisMessage.NullBulkString)
       else RedisMessage.BulkString v.value
 
+let incr key =
+  let set' k v =
+    ignore
+      (Hashtbl.replace memory k
+         { value = string_of_int v; expires_at = Timestamp.never });
+    RedisMessage.Integer v
+  in
+  match Hashtbl.find_opt memory key with
+  | None -> set' key 1
+  | Some v -> (
+      if Timestamp.is_expired v.expires_at then set' key 1
+      else
+        match int_of_string_opt v.value with
+        | None -> RedisMessage.NullBulkString (* TODO: error handling *)
+        | Some n -> set' key (n + 1))
+
 let rec handle client_socket =
   let req = Bytes.create 1024 in
   let bytes = read client_socket req 0 (Bytes.length req) in
@@ -62,6 +68,7 @@ let rec handle client_socket =
                     set key value [] 
                 | "SET", BulkString key :: BulkString value :: opts -> 
                     set key value opts
+                | "INCR", [BulkString key] -> incr key
                 | "GET", [BulkString key] -> get key
                 | _ -> failwith ("error: " ^ String.of_bytes req))
             | _ -> failwith ("error: " ^ String.of_bytes req))))

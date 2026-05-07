@@ -1,10 +1,15 @@
-type t = BulkString of string | SimpleString of string | Array of t list |
-NullBulkString
+type t =
+  | BulkString of string
+  | SimpleString of string
+  | Array of t list
+  | NullBulkString
+  | Integer of int
 
 let rec show = function
   | BulkString s -> "BulkString: " ^ s
   | SimpleString s -> "SimpleString: " ^ s
   | NullBulkString -> "NullBulkString"
+  | Integer n -> "Integer: " ^ string_of_int n
   | Array a -> "Array: [" ^ String.concat "; " (List.map show a) ^ "]"
 
 let rec to_buf ?buf v =
@@ -13,6 +18,7 @@ let rec to_buf ?buf v =
   | BulkString s -> Printf.bprintf buf "$%d\r\n%s\r\n" (String.length s) s
   | NullBulkString -> Printf.bprintf buf "$-1\r\n"
   | SimpleString s -> Printf.bprintf buf "+%s\r\n" s
+  | Integer n -> Printf.bprintf buf ":%d\r\n" n
   | Array a ->
       Printf.bprintf buf "*%d\r\n" (List.length a);
       List.iter (fun x -> ignore (to_buf ~buf x)) a);
@@ -34,17 +40,16 @@ let of_bytes bytes =
       match read_line bytes offset with
       | None -> Error "empty payload"
       | Some (rawline, rawline_len, next) -> (
-          let line =
-            String.of_bytes (Bytes.sub rawline 1 (rawline_len - 1))
-          in
+          let line = String.of_bytes (Bytes.sub rawline 1 (rawline_len - 1)) in
           match Bytes.get rawline 0 with
           | '+' -> Ok (SimpleString line, next)
           | '$' -> (
-              match int_of_string line with
-              | 0 -> Ok (BulkString "", next)
-              | -1 -> Ok (NullBulkString, next)
-              | len when len < 0 -> Error "unexpected string length"
-              | len -> (
+              match int_of_string_opt line with
+              | None -> Error "unable to parse string len"
+              | Some 0 -> Ok (BulkString "", next)
+              | Some -1 -> Ok (NullBulkString, next)
+              | Some len when len < 0 -> Error "unexpected string length"
+              | Some len -> (
                   match read_line bytes next with
                   | None -> Error "empty bulk string"
                   | Some (rawline, rawline_len, next) ->
@@ -56,10 +61,11 @@ let of_bytes bytes =
                         in
                         Ok (BulkString line, next)))
           | '*' -> (
-              match int_of_string line with
-              | 0 -> Ok (Array [], next)
-              | len when len < 0 -> Error "unexpected array length"
-              | len ->
+              match int_of_string_opt line with
+              | None -> Error "unable to parse array length"
+              | Some 0 -> Ok (Array [], next)
+              | Some len when len < 0 -> Error "array length cannot be negative"
+              | Some len ->
                   let rec loop n list offset =
                     if n = 0 then Ok (Array list, offset)
                     else
@@ -68,6 +74,10 @@ let of_bytes bytes =
                       | Ok (msg, next) -> loop (n - 1) (list @ [ msg ]) next
                   in
                   loop len [] next)
+          | ':' -> (
+              match int_of_string_opt line with
+              | None -> Error "unable to parse integer"
+              | Some n -> Ok (Integer n, next))
           | _ -> Error "unexpected message type")
     in
     Result.map fst (parse 0)
