@@ -1,6 +1,7 @@
 open Unix
 
 type record = { value : string; expires_at : Timestamp.t }
+type transaction = { started : bool; }
 
 let memory : (string, record) Hashtbl.t = Hashtbl.create 16
 
@@ -53,7 +54,16 @@ let incr key =
               "ERR value is not an integer or out of range"
         | Some n -> set' key (n + 1))
 
-let multi _ = RedisMessage.SimpleString "OK"
+let transaction = { started = false }
+let multi _ = 
+  ignore (transaction.started = true);
+  RedisMessage.SimpleString "OK"
+
+let exec _ =
+  if transaction.started then (
+    ignore (transaction.started = false);
+    RedisMessage.SimpleString "OK")
+  else RedisMessage.SimpleError "ERR EXEC without MULTI"
 
 let rec handle client_socket =
   let req = Bytes.create 1024 in
@@ -77,6 +87,7 @@ let rec handle client_socket =
                   | "INCR", [ BulkString key ] -> incr key
                   | "GET", [ BulkString key ] -> get key
                   | "MULTI", [ ] -> multi ()
+                  | "EXEC", [ ] -> exec ()
                   | _ -> failwith ("error: " ^ String.of_bytes req))
               | _ -> failwith ("error: " ^ String.of_bytes req))))
     in
