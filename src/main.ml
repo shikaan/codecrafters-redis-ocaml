@@ -97,6 +97,13 @@ let exec tx =
     RedisMessage.Array results)
   else RedisMessage.SimpleError (Generic, "EXEC without MULTI")
 
+let discard tx =
+  if tx.started then (
+    tx.started <- false;
+    tx.queue <- [];
+    RedisMessage.SimpleString "OK")
+  else RedisMessage.SimpleError (Generic, "DISCARD without MULTI")
+
 let rec handle client_socket tx =
   let req = Bytes.create 1024 in
   let bytes = read client_socket req 0 (Bytes.length req) in
@@ -113,6 +120,7 @@ let rec handle client_socket tx =
                     match (String.uppercase_ascii cmd, args) with
                     | "EXEC", [] -> exec tx
                     | "MULTI", [] -> multi tx
+                    | "DISCARD", [] -> discard tx
                     | cmd, args ->
                         if tx.started then queue_cmd tx cmd args
                         else handle_cmd cmd args)
