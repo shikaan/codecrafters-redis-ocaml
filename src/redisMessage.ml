@@ -4,12 +4,14 @@ type t =
   | Array of t list
   | NullBulkString
   | Integer of int
+  | SimpleError of string
 
 let rec show = function
   | BulkString s -> "BulkString: " ^ s
   | SimpleString s -> "SimpleString: " ^ s
   | NullBulkString -> "NullBulkString"
   | Integer n -> "Integer: " ^ string_of_int n
+  | SimpleError s -> "SimpleError: " ^ s
   | Array a -> "Array: [" ^ String.concat "; " (List.map show a) ^ "]"
 
 let rec to_buf ?buf v =
@@ -18,6 +20,7 @@ let rec to_buf ?buf v =
   | BulkString s -> Printf.bprintf buf "$%d\r\n%s\r\n" (String.length s) s
   | NullBulkString -> Printf.bprintf buf "$-1\r\n"
   | SimpleString s -> Printf.bprintf buf "+%s\r\n" s
+  | SimpleError s -> Printf.bprintf buf "-%s\r\n" s
   | Integer n -> Printf.bprintf buf ":%d\r\n" n
   | Array a ->
       Printf.bprintf buf "*%d\r\n" (List.length a);

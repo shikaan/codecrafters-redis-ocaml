@@ -1,7 +1,8 @@
 open Unix
 
-type record = { value: string; expires_at: Timestamp.t; }
-let memory: (string, record) Hashtbl.t = Hashtbl.create 16
+type record = { value : string; expires_at : Timestamp.t }
+
+let memory : (string, record) Hashtbl.t = Hashtbl.create 16
 
 (* TODO: error reporting *)
 let set key value opts =
@@ -47,7 +48,9 @@ let incr key =
       if Timestamp.is_expired v.expires_at then set' key 1
       else
         match int_of_string_opt v.value with
-        | None -> RedisMessage.NullBulkString (* TODO: error handling *)
+        | None ->
+            RedisMessage.SimpleError
+              "ERR value is not an integer or out of range"
         | Some n -> set' key (n + 1))
 
 let rec handle client_socket =
@@ -55,23 +58,24 @@ let rec handle client_socket =
   let bytes = read client_socket req 0 (Bytes.length req) in
   if bytes > 0 then (
     let res =
-      RedisMessage.(to_buf
-        (match of_bytes req with
-        | Error e -> failwith e
-        | Ok msg -> (
-            match msg with
-            | Array (BulkString cmd :: args) -> (
-                match (String.uppercase_ascii cmd, args) with
-                | "PING", [] -> SimpleString "PONG"
-                | "ECHO", [ BulkString s ] -> BulkString s
-                | "SET", [BulkString key; BulkString value] ->
-                    set key value [] 
-                | "SET", BulkString key :: BulkString value :: opts -> 
-                    set key value opts
-                | "INCR", [BulkString key] -> incr key
-                | "GET", [BulkString key] -> get key
-                | _ -> failwith ("error: " ^ String.of_bytes req))
-            | _ -> failwith ("error: " ^ String.of_bytes req))))
+      RedisMessage.(
+        to_buf
+          (match of_bytes req with
+          | Error e -> failwith e
+          | Ok msg -> (
+              match msg with
+              | Array (BulkString cmd :: args) -> (
+                  match (String.uppercase_ascii cmd, args) with
+                  | "PING", [] -> SimpleString "PONG"
+                  | "ECHO", [ BulkString s ] -> BulkString s
+                  | "SET", [ BulkString key; BulkString value ] ->
+                      set key value []
+                  | "SET", BulkString key :: BulkString value :: opts ->
+                      set key value opts
+                  | "INCR", [ BulkString key ] -> incr key
+                  | "GET", [ BulkString key ] -> get key
+                  | _ -> failwith ("error: " ^ String.of_bytes req))
+              | _ -> failwith ("error: " ^ String.of_bytes req))))
     in
     ignore (write client_socket res 0 (Bytes.length res));
     handle client_socket)
