@@ -53,6 +53,8 @@ let incr key =
               "ERR value is not an integer or out of range"
         | Some n -> set' key (n + 1))
 
+let multi _ = RedisMessage.SimpleString "OK"
+
 let rec handle client_socket =
   let req = Bytes.create 1024 in
   let bytes = read client_socket req 0 (Bytes.length req) in
@@ -74,6 +76,7 @@ let rec handle client_socket =
                       set key value opts
                   | "INCR", [ BulkString key ] -> incr key
                   | "GET", [ BulkString key ] -> get key
+                  | "MULTI", [ ] -> multi ()
                   | _ -> failwith ("error: " ^ String.of_bytes req))
               | _ -> failwith ("error: " ^ String.of_bytes req))))
     in
