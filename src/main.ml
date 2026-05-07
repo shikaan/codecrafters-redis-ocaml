@@ -1,8 +1,19 @@
 open Unix
 
-type record = { value: string; expires_at: float; }
+module Timestamp = struct
+  type t = float
+  let never = max_float
+
+  let now _ = Unix.gettimeofday () *. 1000.0
+  let add_s s = now () +. (s *. 1000.0)
+  let add ms = now () +. ms
+  let is_expired ts = ts <> never && ts < (now ())
+end
+
+type record = { value: string; expires_at: Timestamp.t; }
 let memory: (string, record) Hashtbl.t = Hashtbl.create 16
 
+(* TODO: error reporting *)
 let set key value opts =
   let set' k v e =
     ignore (Hashtbl.replace memory k { value = v; expires_at = e });
@@ -10,25 +21,25 @@ let set key value opts =
   in
   RedisMessage.(
     match opts with
-    | BulkString opt :: [ BulkString value ] -> (
+    | BulkString opt :: [ BulkString optval ] -> (
         match String.uppercase_ascii opt with
         | "EX" -> (
-            match float_of_string_opt value with
-            | Some ts -> set' key value (ts *. 1000.0)
+            match float_of_string_opt optval with
+            | Some ts -> set' key value (Timestamp.add_s ts)
             | None -> failwith "invalid unix timestamp")
         | "PX" -> (
-            match float_of_string_opt value with
-            | Some ts -> set' key value ts
+            match float_of_string_opt optval with
+            | Some ts -> set' key value (Timestamp.add ts)
             | None -> failwith "invalid unix timestamp")
         | _ -> failwith ("invalid option: " ^ opt))
-    | [] -> set' key value max_float
+    | [] -> set' key value Timestamp.never
     | _ -> failwith "malformed set command")
 
 let get key =
   match Hashtbl.find_opt memory key with
   | None -> RedisMessage.NullBulkString
   | Some v ->
-      if v.expires_at < Unix.time () then (
+      if Timestamp.is_expired v.expires_at then (
         Hashtbl.remove memory key;
         RedisMessage.NullBulkString)
       else RedisMessage.BulkString v.value
