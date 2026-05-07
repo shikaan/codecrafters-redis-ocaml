@@ -1,14 +1,37 @@
 open Unix
 
-let memory: (string, string) Hashtbl.t = Hashtbl.create 16
+type record = { value: string; expires_at: float; }
+let memory: (string, record) Hashtbl.t = Hashtbl.create 16
 
-let set key value =
-  ignore(Hashtbl.replace memory key value);
-  RedisMessage.SimpleString "OK"
+let set key value opts =
+  let set' k v e =
+    ignore (Hashtbl.replace memory k { value = v; expires_at = e });
+    RedisMessage.SimpleString "OK"
+  in
+  RedisMessage.(
+    match opts with
+    | BulkString opt :: [ BulkString value ] -> (
+        match String.uppercase_ascii opt with
+        | "EX" -> (
+            match float_of_string_opt value with
+            | Some ts -> set' key value (ts *. 1000.0)
+            | None -> failwith "invalid unix timestamp")
+        | "PX" -> (
+            match float_of_string_opt value with
+            | Some ts -> set' key value ts
+            | None -> failwith "invalid unix timestamp")
+        | _ -> failwith ("invalid option: " ^ opt))
+    | [] -> set' key value max_float
+    | _ -> failwith "malformed set command")
 
-let get key = match Hashtbl.find_opt memory key with
+let get key =
+  match Hashtbl.find_opt memory key with
   | None -> RedisMessage.NullBulkString
-  | Some v -> RedisMessage.BulkString v
+  | Some v ->
+      if v.expires_at < Unix.time () then (
+        Hashtbl.remove memory key;
+        RedisMessage.NullBulkString)
+      else RedisMessage.BulkString v.value
 
 let rec handle client_socket =
   let req = Bytes.create 1024 in
@@ -24,7 +47,10 @@ let rec handle client_socket =
                 match (String.uppercase_ascii cmd, args) with
                 | "PING", [] -> SimpleString "PONG"
                 | "ECHO", [ BulkString s ] -> BulkString s
-                | "SET", [BulkString key; BulkString value] -> set key value
+                | "SET", [BulkString key; BulkString value] ->
+                    set key value [] 
+                | "SET", BulkString key :: BulkString value :: opts -> 
+                    set key value opts
                 | "GET", [BulkString key] -> get key
                 | _ -> failwith ("error: " ^ String.of_bytes req))
             | _ -> failwith ("error: " ^ String.of_bytes req))))
