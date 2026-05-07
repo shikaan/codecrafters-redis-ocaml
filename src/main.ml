@@ -61,6 +61,11 @@ let incr key =
             SimpleError (Generic, "value is not an integer or out of range")
         | Some n -> set' key (n + 1))
 
+let queue_cmd tx cmd args =
+  (* adding to the head like a stack because it's faster; 
+     we'll reverse, once, before execution *)
+  tx.queue <- (cmd, args) :: tx.queue;
+  RedisMessage.SimpleString "QUEUED"
 
 let handle_cmd cmd args =
   RedisMessage.(
@@ -82,15 +87,15 @@ let multi tx =
 
 let exec tx =
   if tx.started then (
-    let results = List.map (fun (cmd, args) -> handle_cmd cmd args) tx.queue in
+    (* reversed because we are adding to the head, instead of enqueing *)
+    let results =
+      List.rev tx.queue |>
+      List.map (fun (cmd, args) -> handle_cmd cmd args)
+    in
     tx.started <- false;
     tx.queue <- [];
     RedisMessage.Array results)
   else RedisMessage.SimpleError (Generic, "EXEC without MULTI")
-
-let queue_cmd tx cmd args =
-  tx.queue <- (cmd, args) :: tx.queue;
-  RedisMessage.SimpleString "QUEUED"
 
 let rec handle client_socket tx =
   let req = Bytes.create 1024 in
