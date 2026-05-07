@@ -62,7 +62,7 @@ let multi _ =
 let exec _ =
   if transaction.started then (
     ignore (transaction.started = false);
-    RedisMessage.SimpleString "OK")
+    RedisMessage.Array [])
   else RedisMessage.SimpleError "ERR EXEC without MULTI"
 
 let rec handle client_socket =
