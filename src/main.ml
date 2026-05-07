@@ -1,7 +1,7 @@
 open Unix
 
 type record = { value : string; expires_at : Timestamp.t }
-type transaction = { started : bool; }
+type transaction = { mutable started : bool; }
 
 let memory : (string, record) Hashtbl.t = Hashtbl.create 16
 
@@ -56,12 +56,12 @@ let incr key =
 
 let transaction = { started = false }
 let multi _ = 
-  ignore (transaction.started = true);
+  transaction.started <- true;
   RedisMessage.SimpleString "OK"
 
 let exec _ =
   if transaction.started then (
-    ignore (transaction.started = false);
+    transaction.started <- false;
     RedisMessage.Array [])
   else RedisMessage.SimpleError "ERR EXEC without MULTI"
 
