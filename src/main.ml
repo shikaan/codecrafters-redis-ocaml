@@ -32,9 +32,7 @@ let set key value opts =
 
 let get key =
   RedisMessage.(
-    match Store.get key with
-    | None -> NullBulkString
-    | Some v -> BulkString v)
+    match Store.get key with None -> NullBulkString | Some v -> BulkString v)
 
 let incr key =
   let set' k v =
@@ -48,11 +46,22 @@ let incr key =
       | None -> SimpleError (Generic, "value is not an integer or out of range")
       | Some n -> set' key (n + 1))
 
+let config (conf: Config.t) opts =
+  RedisMessage.(
+    match opts with
+    | [ BulkString "GET"; BulkString key ] -> (
+        match String.lowercase_ascii key with
+        | "dir" -> Array [ BulkString "dir"; BulkString conf.dir ]
+        | "dbfilename" ->
+            Array [ BulkString "dbfilename"; BulkString conf.dbfilename ]
+        | _ -> SimpleError (Generic, ""))
+    | _ -> SimpleError (Generic, ""))
+
 let queue_cmd tx cmd args =
   ignore (Queue.push (cmd, args) tx.queue);
   RedisMessage.SimpleString "QUEUED"
 
-let handle_cmd cmd args =
+let handle_cmd conf cmd args =
   RedisMessage.(
     match (cmd, args) with
     | "PING", [] -> SimpleString "PONG"
@@ -61,6 +70,7 @@ let handle_cmd cmd args =
     | "SET", BulkString key :: BulkString value :: opts -> set key value opts
     | "INCR", [ BulkString key ] -> incr key
     | "GET", [ BulkString key ] -> get key
+    | "CONFIG", opts -> config conf opts
     | _ ->
         SimpleError
           ( Generic,
@@ -78,12 +88,12 @@ let multi tx =
     tx.started <- true;
     RedisMessage.SimpleString "OK")
 
-let exec tx =
+let exec conf tx =
   if tx.started then (
     let results =
-      Queue.to_seq tx.queue |>
-      Seq.map (fun (cmd, args) -> handle_cmd cmd args) |> 
-      List.of_seq
+      Queue.to_seq tx.queue
+      |> Seq.map (fun (cmd, args) -> handle_cmd conf cmd args)
+      |> List.of_seq
     in
     tx.started <- false;
     tx.queue <- Queue.create ();
@@ -97,7 +107,7 @@ let discard tx =
     RedisMessage.SimpleString "OK")
   else RedisMessage.SimpleError (Generic, "DISCARD without MULTI")
 
-let rec handle client_socket tx =
+let rec handle conf client_socket tx =
   let req = Bytes.create 1024 in
   let bytes = read client_socket req 0 (Bytes.length req) in
   if bytes > 0 then (
@@ -111,18 +121,19 @@ let rec handle client_socket tx =
                 match msg with
                 | Array (BulkString cmd :: args) -> (
                     match (String.uppercase_ascii cmd, args) with
-                    | "EXEC", [] -> exec tx
+                    | "EXEC", [] -> exec conf tx
                     | "MULTI", [] -> multi tx
                     | "DISCARD", [] -> discard tx
                     | cmd, args ->
                         if tx.started then queue_cmd tx cmd args
-                        else handle_cmd cmd args)
+                        else handle_cmd conf cmd args)
                 | _ -> SimpleError (Generic, "syntax error")))))
     in
     ignore (write client_socket res 0 (Bytes.length res));
-    handle client_socket tx)
+    handle conf client_socket tx)
 
 let () =
+  let conf = Config.of_args () in
   let server_socket = socket PF_INET SOCK_STREAM 0 in
   setsockopt server_socket SO_REUSEADDR true;
   bind server_socket (ADDR_INET (inet_addr_of_string "127.0.0.1", 6379));
@@ -134,7 +145,7 @@ let () =
       Thread.create
         (fun () ->
           let tx = { started = false; queue = Queue.create () } in
-          handle client_socket tx;
+          handle conf client_socket tx;
           close client_socket)
         ()
     in
