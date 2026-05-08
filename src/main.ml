@@ -46,6 +46,13 @@ let incr key =
       | None -> SimpleError (Generic, "value is not an integer or out of range")
       | Some n -> set' key (n + 1))
 
+let keys pattern =
+  match pattern with
+  | "*" ->
+      RedisMessage.Array
+        (List.map (fun s -> RedisMessage.BulkString s) (Store.keys ()))
+| _ -> RedisMessage.SimpleError (Generic, "not implemented")
+
 let config (conf: Config.t) opts =
   RedisMessage.(
     match opts with
@@ -70,6 +77,7 @@ let handle_cmd conf cmd args =
     | "SET", BulkString key :: BulkString value :: opts -> set key value opts
     | "INCR", [ BulkString key ] -> incr key
     | "GET", [ BulkString key ] -> get key
+    | "KEYS", [ BulkString pattern ] -> keys pattern
     | "CONFIG", opts -> config conf opts
     | _ ->
         SimpleError

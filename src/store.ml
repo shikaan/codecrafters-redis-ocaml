@@ -15,3 +15,11 @@ let get k =
         None)
       else Some v.value
 
+let keys () =
+  Hashtbl.fold
+    (fun k v acc ->
+      if Timestamp.is_expired v.expires_at then (
+        Hashtbl.remove memory k;
+        acc)
+      else k :: acc)
+    memory []
