@@ -64,11 +64,11 @@ let config (conf: Config.t) opts =
         | _ -> SimpleError (Generic, ""))
     | _ -> SimpleError (Generic, ""))
 
-let queue_cmd tx cmd args =
-  ignore (Queue.push (cmd, args) tx.queue);
+let queue_cmd tx invocation =
+  ignore (Queue.push invocation tx.queue);
   RedisMessage.SimpleString "QUEUED"
 
-let handle_cmd conf cmd args =
+let handle_cmd conf (cmd, args) =
   RedisMessage.(
     match (cmd, args) with
     | "PING", [] -> SimpleString "PONG"
@@ -99,9 +99,7 @@ let multi tx =
 let exec conf tx =
   if tx.started then (
     let results =
-      Queue.to_seq tx.queue
-      |> Seq.map (fun (cmd, args) -> handle_cmd conf cmd args)
-      |> List.of_seq
+      Queue.to_seq tx.queue |> Seq.map (handle_cmd conf) |> List.of_seq
     in
     tx.started <- false;
     tx.queue <- Queue.create ();
@@ -132,9 +130,9 @@ let rec handle conf client_socket tx =
                     | "EXEC", [] -> exec conf tx
                     | "MULTI", [] -> multi tx
                     | "DISCARD", [] -> discard tx
-                    | cmd, args ->
-                        if tx.started then queue_cmd tx cmd args
-                        else handle_cmd conf cmd args)
+                    | command ->
+                        if tx.started then queue_cmd tx command
+                        else handle_cmd conf command)
                 | _ -> SimpleError (Generic, "syntax error")))))
     in
     ignore (write client_socket res 0 (Bytes.length res));
