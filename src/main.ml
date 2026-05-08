@@ -1,17 +1,13 @@
 open Unix
 
-type record = { value : string; expires_at : Timestamp.t }
-
 type transaction = {
   mutable started : bool;
-  mutable queue : (string * RedisMessage.t list) list;
+  mutable queue : (string * RedisMessage.t list) Queue.t;
 }
 
-let memory : (string, record) Hashtbl.t = Hashtbl.create 16
-
 let set key value opts =
-  let set' k v e =
-    ignore (Hashtbl.replace memory k { value = v; expires_at = e });
+  let set' ?e k v =
+    ignore (Store.set k v ?expires_at:e);
     RedisMessage.SimpleString "OK"
   in
   RedisMessage.(
@@ -20,51 +16,40 @@ let set key value opts =
         match String.uppercase_ascii opt with
         | "EX" -> (
             match float_of_string_opt optval with
-            | Some ts -> set' key value (Timestamp.add_s ts)
+            | Some ts -> set' key value ~e:(Timestamp.add_s ts)
             | None ->
                 SimpleError (Generic, "value is not an integer or out of range")
             )
         | "PX" -> (
             match float_of_string_opt optval with
-            | Some ts -> set' key value (Timestamp.add ts)
+            | Some ts -> set' key value ~e:(Timestamp.add ts)
             | None ->
                 SimpleError (Generic, "value is not an integer or out of range")
             )
         | _ -> SimpleError (Generic, "syntax error"))
-    | [] -> set' key value Timestamp.never
+    | [] -> set' key value
     | _ -> SimpleError (Generic, "wrong number of arguments for 'set' command"))
 
 let get key =
   RedisMessage.(
-    match Hashtbl.find_opt memory key with
+    match Store.get key with
     | None -> NullBulkString
-    | Some v ->
-        if Timestamp.is_expired v.expires_at then (
-          Hashtbl.remove memory key;
-          NullBulkString)
-        else BulkString v.value)
+    | Some v -> BulkString v)
 
 let incr key =
   let set' k v =
-    ignore
-      (Hashtbl.replace memory k
-         { value = string_of_int v; expires_at = Timestamp.never });
+    ignore (Store.set k (string_of_int v));
     RedisMessage.Integer v
   in
-  match Hashtbl.find_opt memory key with
+  match Store.get key with
   | None -> set' key 1
   | Some v -> (
-      if Timestamp.is_expired v.expires_at then set' key 1
-      else
-        match int_of_string_opt v.value with
-        | None ->
-            SimpleError (Generic, "value is not an integer or out of range")
-        | Some n -> set' key (n + 1))
+      match int_of_string_opt v with
+      | None -> SimpleError (Generic, "value is not an integer or out of range")
+      | Some n -> set' key (n + 1))
 
 let queue_cmd tx cmd args =
-  (* adding to the head like a stack because it's faster; 
-     we'll reverse, once, before execution *)
-  tx.queue <- (cmd, args) :: tx.queue;
+  ignore (Queue.push (cmd, args) tx.queue);
   RedisMessage.SimpleString "QUEUED"
 
 let handle_cmd cmd args =
@@ -76,7 +61,15 @@ let handle_cmd cmd args =
     | "SET", BulkString key :: BulkString value :: opts -> set key value opts
     | "INCR", [ BulkString key ] -> incr key
     | "GET", [ BulkString key ] -> get key
-    | _ -> SimpleError (Generic, "unknown command '" ^ cmd ^ "'"))
+    | _ ->
+        SimpleError
+          ( Generic,
+            "unknown command '" ^ cmd ^ "'"
+            ^
+            match args with
+            | head :: rest ->
+                " with args beginning with " ^ RedisMessage.show head
+            | _ -> "" ))
 
 let multi tx =
   if tx.started then
@@ -87,20 +80,20 @@ let multi tx =
 
 let exec tx =
   if tx.started then (
-    (* reversed because we are adding to the head, instead of enqueing *)
     let results =
-      List.rev tx.queue |>
-      List.map (fun (cmd, args) -> handle_cmd cmd args)
+      Queue.to_seq tx.queue |>
+      Seq.map (fun (cmd, args) -> handle_cmd cmd args) |> 
+      List.of_seq
     in
     tx.started <- false;
-    tx.queue <- [];
+    tx.queue <- Queue.create ();
     RedisMessage.Array results)
   else RedisMessage.SimpleError (Generic, "EXEC without MULTI")
 
 let discard tx =
   if tx.started then (
     tx.started <- false;
-    tx.queue <- [];
+    tx.queue <- Queue.create ();
     RedisMessage.SimpleString "OK")
   else RedisMessage.SimpleError (Generic, "DISCARD without MULTI")
 
@@ -140,7 +133,7 @@ let () =
     let _ =
       Thread.create
         (fun () ->
-          let tx = { started = false; queue = [] } in
+          let tx = { started = false; queue = Queue.create () } in
           handle client_socket tx;
           close client_socket)
         ()

@@ -10,13 +10,21 @@ type t =
   | Integer of int
   | SimpleError of error * string
 
-let rec show = function
+let rec show_dbg = function
   | BulkString s -> "BulkString: " ^ s
   | SimpleString s -> "SimpleString: " ^ s
   | NullBulkString -> "NullBulkString"
   | Integer n -> "Integer: " ^ string_of_int n
   | SimpleError (k, s) -> "SimpleError: " ^ show_error k ^ " " ^ s
-  | Array a -> "Array: [" ^ String.concat "; " (List.map show a) ^ "]"
+  | Array a -> "Array: [" ^ String.concat "; " (List.map show_dbg a) ^ "]"
+
+let rec show = function
+  | BulkString s -> s
+  | SimpleString s -> s
+  | NullBulkString -> "(null)"
+  | Integer n -> string_of_int n
+  | SimpleError (k, s) -> "(error) " ^ show_error k ^ " " ^ s
+  | Array a -> "[" ^ String.concat ", " (List.map show a) ^ "]"
 
 let rec to_buf ?buf v =
   let buf = Option.fold ~none:(Buffer.create 64) ~some:Fun.id buf in
