@@ -15,13 +15,13 @@ let set key value opts =
     | BulkString opt :: [ BulkString optval ] -> (
         match String.uppercase_ascii opt with
         | "EX" -> (
-            match float_of_string_opt optval with
+            match Int32.of_string_opt optval with
             | Some ts -> set' key value ~e:(Timestamp.add_s ts)
             | None ->
                 SimpleError (Generic, "value is not an integer or out of range")
             )
         | "PX" -> (
-            match float_of_string_opt optval with
+            match Int64.of_string_opt optval with
             | Some ts -> set' key value ~e:(Timestamp.add ts)
             | None ->
                 SimpleError (Generic, "value is not an integer or out of range")
@@ -30,16 +30,24 @@ let set key value opts =
     | [] -> set' key value
     | _ -> SimpleError (Generic, "wrong number of arguments for 'set' command"))
 
+let save (conf: Config.t) = match (Store.Encoding.encode ()) with
+  | Ok bytes -> (
+    let c = open_out_bin (conf.dbfilename) in 
+    output_bytes c bytes;
+    close_out c;
+    RedisMessage.SimpleString "OK")
+  | Error e -> RedisMessage.SimpleError (Generic, e)
+
 let get key =
   RedisMessage.(
-    match Store.get key with None -> NullBulkString | Some v -> BulkString v)
+    match Store.get_opt key with None -> NullBulkString | Some v -> BulkString v)
 
 let incr key =
   let set' k v =
     ignore (Store.set k (string_of_int v));
     RedisMessage.Integer v
   in
-  match Store.get key with
+  match Store.get_opt key with
   | None -> set' key 1
   | Some v -> (
       match int_of_string_opt v with
@@ -79,6 +87,7 @@ let handle_cmd conf (cmd, args) =
     | "GET", [ BulkString key ] -> get key
     | "KEYS", [ BulkString pattern ] -> keys pattern
     | "CONFIG", opts -> config conf opts
+    | "SAVE", [] -> save conf
     | _ ->
         SimpleError
           ( Generic,
