@@ -30,17 +30,21 @@ let set key value opts =
     | [] -> set' key value
     | _ -> SimpleError (Generic, "wrong number of arguments for 'set' command"))
 
-let save (conf: Config.t) = match (Store.Encoding.encode ()) with
-  | Ok bytes -> (
-    let c = open_out_bin (conf.dbfilename) in 
-    output_bytes c bytes;
-    close_out c;
-    RedisMessage.SimpleString "OK")
+let save (conf : Config.t) =
+  match Store.Encoding.encode () with
+  | Ok bytes ->
+      if not (Sys.file_exists conf.dir) then Unix.mkdir conf.dir 0o755;
+      let c = open_out_bin (Config.path conf) in
+      output_bytes c bytes;
+      close_out c;
+      RedisMessage.SimpleString "OK"
   | Error e -> RedisMessage.SimpleError (Generic, e)
 
 let get key =
   RedisMessage.(
-    match Store.get_opt key with None -> NullBulkString | Some v -> BulkString v)
+    match Store.get_opt key with
+    | None -> NullBulkString
+    | Some v -> BulkString v)
 
 let incr key =
   let set' k v =
@@ -59,9 +63,9 @@ let keys pattern =
   | "*" ->
       RedisMessage.Array
         (List.map (fun s -> RedisMessage.BulkString s) (Store.keys ()))
-| _ -> RedisMessage.SimpleError (Generic, "not implemented")
+  | _ -> RedisMessage.SimpleError (Generic, "not implemented")
 
-let config (conf: Config.t) opts =
+let config (conf : Config.t) opts =
   RedisMessage.(
     match opts with
     | [ BulkString "GET"; BulkString key ] -> (
@@ -149,6 +153,11 @@ let rec handle conf client_socket tx =
 
 let () =
   let conf = Config.of_args () in
+  if Sys.file_exists (Config.path conf) then (
+    let ic = open_in_bin (Config.path conf) in
+    let bytes = In_channel.input_all ic |> Bytes.of_string in
+    close_in ic;
+    match Store.Decoding.decode bytes with Ok _ -> () | Error e -> failwith e);
   let server_socket = socket PF_INET SOCK_STREAM 0 in
   setsockopt server_socket SO_REUSEADDR true;
   bind server_socket (ADDR_INET (inet_addr_of_string "127.0.0.1", 6379));
