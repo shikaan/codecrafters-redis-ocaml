@@ -43,7 +43,7 @@ let of_bytes bytes =
   let len = Bytes.length bytes in
   if len <= 0 then Error "empty message"
   else
-    let read_line bytes offset =
+    let read_line' bytes offset =
       match Bytes.index_from_opt bytes offset '\n' with
       | None -> None
       | Some lf ->
@@ -51,8 +51,8 @@ let of_bytes bytes =
           let line = Bytes.sub bytes offset line_len in
           Some (line, line_len, lf + 1)
     in
-    let rec parse offset =
-      match read_line bytes offset with
+    let rec parse_at' offset =
+      match read_line' bytes offset with
       | None -> Error "empty payload"
       | Some (rawline, rawline_len, next) -> (
           let line = String.of_bytes (Bytes.sub rawline 1 (rawline_len - 1)) in
@@ -65,7 +65,7 @@ let of_bytes bytes =
               | Some -1 -> Ok (NullBulkString, next)
               | Some len when len < 0 -> Error "unexpected string length"
               | Some len -> (
-                  match read_line bytes next with
+                  match read_line' bytes next with
                   | None -> Error "empty bulk string"
                   | Some (rawline, rawline_len, next) ->
                       if rawline_len <> len then
@@ -84,7 +84,7 @@ let of_bytes bytes =
                   let rec loop n list offset =
                     if n = 0 then Ok (Array list, offset)
                     else
-                      match parse offset with
+                      match parse_at' offset with
                       | Error e -> Error e
                       | Ok (msg, next) -> loop (n - 1) (list @ [ msg ]) next
                   in
@@ -95,4 +95,4 @@ let of_bytes bytes =
               | Some n -> Ok (Integer n, next))
           | _ -> Error "unexpected message type")
     in
-    Result.map fst (parse 0)
+    Result.map fst (parse_at' 0)

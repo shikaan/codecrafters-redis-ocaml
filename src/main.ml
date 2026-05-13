@@ -31,7 +31,7 @@ let set key value opts =
     | _ -> SimpleError (Generic, "wrong number of arguments for 'set' command"))
 
 let save (conf : Config.t) =
-  match Store.Encoding.encode () with
+  match RDB.Encoding.encode () with
   | Ok bytes ->
       if not (Sys.file_exists conf.dir) then Unix.mkdir conf.dir 0o755;
       let c = open_out_bin (Config.path conf) in
@@ -157,7 +157,7 @@ let () =
     let ic = open_in_bin (Config.path conf) in
     let bytes = In_channel.input_all ic |> Bytes.of_string in
     close_in ic;
-    match Store.Decoding.decode bytes with Ok _ -> () | Error e -> failwith e);
+    match RDB.Decoding.decode bytes with Ok _ -> () | Error e -> failwith e);
   let server_socket = socket PF_INET SOCK_STREAM 0 in
   setsockopt server_socket SO_REUSEADDR true;
   bind server_socket (ADDR_INET (inet_addr_of_string "127.0.0.1", 6379));
