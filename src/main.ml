@@ -132,7 +132,7 @@ let rec handle conf client_socket tx =
   if bytes > 0 then (
     let res =
       RedisMessage.(
-        to_buf
+        to_bytes
           (match of_bytes req with
           | Error e -> failwith e
           | Ok msg -> (

@@ -26,7 +26,7 @@ let rec show = function
   | SimpleError (k, s) -> "(error) " ^ show_error k ^ " " ^ s
   | Array a -> "[" ^ String.concat ", " (List.map show a) ^ "]"
 
-let rec to_buf ?buf v =
+let rec to_bytes ?buf v =
   let buf = Option.fold ~none:(Buffer.create 64) ~some:Fun.id buf in
   (match v with
   | BulkString s -> Printf.bprintf buf "$%d\r\n%s\r\n" (String.length s) s
@@ -36,7 +36,7 @@ let rec to_buf ?buf v =
   | Integer n -> Printf.bprintf buf ":%d\r\n" n
   | Array a ->
       Printf.bprintf buf "*%d\r\n" (List.length a);
-      List.iter (fun x -> ignore (to_buf ~buf x)) a);
+      List.iter (fun x -> ignore (to_bytes ~buf x)) a);
   Buffer.to_bytes buf
 
 let of_bytes bytes =
