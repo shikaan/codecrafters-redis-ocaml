@@ -32,7 +32,7 @@ let keys () =
     _values []
 
 let ( let* ) = Result.bind
-let magic = Bytes.of_string "REDIS0011"
+let magic = Bytes.of_string "REDIS"
 let metadata_byte = Bytes.of_string "\xfa"
 let info_byte = Bytes.of_string "\xfb"
 let milliseconds_byte = Bytes.of_string "\xfc"
@@ -40,6 +40,7 @@ let seconds_byte = Bytes.of_string "\xfd"
 let database_byte = Bytes.of_string "\xfe"
 let footer_byte = Bytes.of_string "\xff"
 let string_byte = Bytes.of_string "\x00"
+let bytes_of_bytes = Bytes.concat Bytes.empty
 
 module Encoding = struct
   let len n =
@@ -64,16 +65,13 @@ module Encoding = struct
     | Ok encoded -> Ok Bytes.(of_string s |> cat encoded)
     | Error e -> Error e
 
-  let header _ = Ok magic
+  let header _ = Ok (bytes_of_bytes [magic; Bytes.of_string "0011"])
 
   let metadata fields =
     let subsection (k, v) =
-      match str k with
-      | Ok key -> (
-          match str v with
-          | Ok value -> Ok Bytes.(cat metadata_byte key |> cat value)
-          | Error e -> Error e)
-      | Error e -> Error e
+      let* key = str k in
+      let* value = str v in
+      Ok (bytes_of_bytes [ metadata_byte; key; value ])
     in
     List.fold_left
       (fun acc f ->
@@ -86,26 +84,13 @@ module Encoding = struct
       (Ok Bytes.empty) fields
 
   let database idx values expirations =
-    let info =
-      match (len (Hashtbl.length values), len (Hashtbl.length expirations)) with
-      | Error e, _ -> Error e
-      | _, Error e -> Error e
-      | Ok nvalues, Ok nexpirations ->
-          Ok (Bytes.cat nvalues nexpirations |> Bytes.cat info_byte)
-    in
-    let start =
-      match len idx with
-      | Error e -> Error e
-      | Ok index -> Ok (Bytes.cat database_byte index)
-    in
-    let field k =
-      let field' k v =
-        match (str k, str v) with
-        | Ok key, Ok value -> Ok (Bytes.cat key value |> Bytes.cat string_byte)
-        | Error e, _ -> Error e
-        | _, Error e -> Error e
+    let field' k =
+      let field'' k v =
+        let* key = str k in
+        let* value = str v in
+        Ok (bytes_of_bytes [ string_byte; key; value ])
       in
-      let exp' = function
+      let exp'' = function
         | Timestamp.Seconds s ->
             let buf = Bytes.create 5 in
             Bytes.set buf 0 (Bytes.get seconds_byte 0);
@@ -118,31 +103,30 @@ module Encoding = struct
             Ok buf
       in
       match get_exp_opt k with
-      | Some v, None -> field' k v
-      | Some v, Some exp -> (
-          match (exp' exp, field' k v) with
-          | Ok exp', Ok field' -> Ok (Bytes.cat exp' field')
-          | Error e, _ -> Error e
-          | _, Error e -> Error e)
+      | Some v, None -> field'' k v
+      | Some v, Some exp ->
+          let* e = exp'' exp in
+          let* f = field'' k v in
+          Ok (Bytes.cat e f)
       | _ -> Error "cannot encode field"
     in
-    match (start, info) with
-    | Error e, _ -> Error e
-    | _, Error e -> Error e
-    | Ok start', Ok info' ->
-        Hashtbl.fold
-          (fun k _ acc ->
-            match (acc, field k) with
-            | Error e, _ -> Error e
-            | _, Error e -> Error e
-            | Ok acc', Ok field' -> Ok (Bytes.cat acc' field'))
-          values
-          (Ok (Bytes.cat start' info'))
+    let* dbidx = len idx in
+    let* nvalues = len (Hashtbl.length values) in
+    let* nexpirations = len (Hashtbl.length expirations) in
+    let buf =
+      bytes_of_bytes [ database_byte; dbidx; info_byte; nvalues; nexpirations ]
+    in
+    Hashtbl.fold
+      (fun k _ acc ->
+        match (acc, field' k) with
+        | Error e, _ -> Error e
+        | _, Error e -> Error e
+        | Ok acc', Ok field' -> Ok (Bytes.cat acc' field'))
+      values (Ok buf)
 
   let footer _ =
-    Ok
-      (Bytes.cat footer_byte
-         (Bytes.of_string "\x00\x00\x00\x00\x00\x00\x00\x00"))
+    let z = Bytes.of_string "\x00" in
+    Ok (bytes_of_bytes [ footer_byte; z; z; z; z; z; z; z; z ])
 
   let encode () =
     List.fold_left
@@ -226,9 +210,15 @@ module Decoding = struct
     let c = { pos = 0; bytes } in
 
     let validate_header' () =
-      let* hdr = read c (Bytes.length magic) in
-      if Bytes.equal hdr magic then (
-        Printf.printf "Version: %s\n" (Bytes.to_string magic);
+      let lhdr = Bytes.length magic in
+      let* magic' = read c lhdr in
+      let* version' =
+        let* version = read c 4 in
+        let sversion = String.of_bytes version in
+        Ok (int_of_string sversion)
+      in
+      if Bytes.equal magic' magic && version' >= 11 then (
+        Printf.printf "Version: v%d\n" version';
         Ok ())
       else Error "unexpected header"
     in
@@ -258,26 +248,28 @@ module Decoding = struct
           let* values_size = len c in
           let* expirations_size = len c in
           let rec loop _ =
-            let str' ?exp _ =
+            let str' ttl =
               let* key = str c in
               let* value = str c in
               Printf.printf "  - %s: %s" key value;
-              set key value ?expires_at:exp;
+              set key value ?expires_at:ttl;
               loop ()
             in
             let* next = peek c 1 in
             match next with
             | b when Bytes.equal b string_byte ->
                 c.pos <- c.pos + 1;
-                str' ()
+                str' None
             | b when Bytes.equal b milliseconds_byte ->
-                let ms = Bytes.get_int64_le c.bytes (c.pos + 2) in
-                c.pos <- c.pos + 7;
-                str' (Timestamp.Milliseconds ms)
+                let ms = Bytes.get_int64_le c.bytes (c.pos + 1) in
+                c.pos <- c.pos + 10;
+                Printf.printf "saving ms...\n";
+                str' (Some (Timestamp.Milliseconds ms))
             | b when Bytes.equal b seconds_byte ->
-                let s = Bytes.get_int32_le c.bytes (c.pos + 2) in
-                c.pos <- c.pos + 5;
-                str' (Timestamp.Seconds s)
+                let s = Bytes.get_int32_le c.bytes (c.pos + 1) in
+                c.pos <- c.pos + 6;
+                Printf.printf "saving s...\n";
+                str' (Some (Timestamp.Seconds s))
             | b when Bytes.equal b footer_byte -> Ok ()
             | _ -> Error "unexpected"
           in
