@@ -171,6 +171,8 @@ end = struct
         | _ -> Error "unexpected special encoding")
     | _ -> Error "unexpected length"
 
+  let unwrap = function Length i -> i | Value i -> i
+
   (** decodes bytes as string *)
   let str c =
     match len c with
@@ -198,7 +200,7 @@ end = struct
         Ok (int_of_string sversion)
       in
       if Bytes.equal magic' magic && version' >= 11 then (
-        Printf.printf "Version: v%d\n" version';
+        Log.info "Version: %d" version';
         Ok ())
       else Error "unexpected header"
     in
@@ -210,28 +212,29 @@ end = struct
           c.pos <- c.pos + 1;
           let* key = str c in
           let* value = str c in
-          Printf.printf "  - %s: %s\n" key value;
+          Log.info "  - %s: %s" key value;
           loop ())
         else Ok ()
       in
-      Printf.printf "Metadata:\n";
+      Log.info "Metadata:";
       loop ()
     in
 
     let read_data' () =
       let* database = read c 1 in
-      if Bytes.equal database database_byte then
+      if Bytes.equal database database_byte then (
         let* index = read c 1 in
         let* info = read c 1 in
         if not (Bytes.equal info info_byte) then Error "missing info byte"
         else
           let* values_size = len c in
           let* expirations_size = len c in
+          Log.info "Found %d records of which %d have expirations."
+            (unwrap values_size) (unwrap expirations_size);
           let rec loop _ =
             let str' ttl =
               let* key = str c in
               let* value = str c in
-              Printf.printf "  - %s: %s" key value;
               Store.set key value ?expires_at:ttl;
               loop ()
             in
@@ -249,14 +252,15 @@ end = struct
                 c.pos <- c.pos + 6;
                 str' (Some (Timestamp.Seconds s))
             | b when Bytes.equal b footer_byte -> Ok ()
-            | _ -> Error "unexpected"
+            | _ -> Error "unexpected database record"
           in
-          loop ()
+          loop ())
       else Error "expected database byte"
     in
-
+    Log.info "Decoding database...";
     let* _ = validate_header' () in
     let* _ = validate_metadata' () in
     let* _ = read_data' () in
+    Log.info "Decoding database... OK";
     Ok ()
 end
