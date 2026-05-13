@@ -1,0 +1,10 @@
+(library
+ (name redis_lib)
+ (wrapped false)
+ (modules RDB config log redisMessage store timestamp)
+ (libraries unix threads))
+
+(executable
+ (name main)
+ (modules main)
+ (libraries unix threads redis_lib))

@@ -1,0 +1,9 @@
+(test
+ (name test_timestamp)
+ (modules test_timestamp)
+ (libraries unix threads redis_lib))
+
+(test
+ (name test_redisMessage)
+ (modules test_redisMessage)
+ (libraries unix threads redis_lib))
