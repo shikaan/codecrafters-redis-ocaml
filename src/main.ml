@@ -31,7 +31,7 @@ let set key value opts =
     | _ -> SimpleError (Generic, "wrong number of arguments for 'set' command"))
 
 let save (conf : Config.t) =
-  match Store.Encoding.encode () with
+  match RDB.Encoding.encode () with
   | Ok bytes ->
       if not (Sys.file_exists conf.dir) then Unix.mkdir conf.dir 0o755;
       let c = open_out_bin (Config.path conf) in
@@ -154,14 +154,21 @@ let rec handle conf client_socket tx =
 let () =
   let conf = Config.of_args () in
   if Sys.file_exists (Config.path conf) then (
+    Log.info "Reading database at %s..." (Config.path conf);
     let ic = open_in_bin (Config.path conf) in
     let bytes = In_channel.input_all ic |> Bytes.of_string in
     close_in ic;
-    match Store.Decoding.decode bytes with Ok _ -> () | Error e -> failwith e);
+    match RDB.Decoding.decode bytes with
+    | Ok _ -> Log.info "Reading database at %s... OK" (Config.path conf)
+    | Error e ->
+        Log.error "%s" e;
+        exit 1)
+  else Log.info "No database found at %s. Creating new file." (Config.path conf);
   let server_socket = socket PF_INET SOCK_STREAM 0 in
   setsockopt server_socket SO_REUSEADDR true;
   bind server_socket (ADDR_INET (inet_addr_of_string "127.0.0.1", 6379));
   listen server_socket 1;
+  Log.info "Accepting connections at 127.0.0.1:6379";
 
   while true do
     let client_socket, _ = accept server_socket in
